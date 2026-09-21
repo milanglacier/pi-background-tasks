@@ -1,0 +1,50 @@
+{
+	"name": "pi-background-tasks",
+	"version": "0.6.1",
+	"description": "Reactive background shell tasks for pi with /bg, Ctrl+Shift+B, log viewing, and agent wakeups on output.",
+	"keywords": [
+		"automation",
+		"background-tasks",
+		"pi",
+		"pi-coding-agent",
+		"pi-package",
+		"shell",
+		"watch"
+	],
+	"license": "MIT",
+	"type": "module",
+	"files": [
+		"index.ts",
+		"background-tasks-shared.ts",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"build": "npm run typecheck && npm run test",
+		"typecheck": "tsc --project ./tsconfig.json",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": ">=0.84.1",
+		"@earendil-works/pi-ai": ">=0.84.1",
+		"@earendil-works/pi-coding-agent": ">=0.84.1",
+		"@earendil-works/pi-tui": ">=0.84.1",
+		"typebox": "^1.1.24"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-agent-core": "^0.84.1",
+		"@earendil-works/pi-ai": "^0.84.1",
+		"@earendil-works/pi-coding-agent": "^0.84.1",
+		"@earendil-works/pi-tui": "^0.84.1",
+		"@types/node": "^26.1.0",
+		"typebox": "^1.1.24",
+		"typescript": "^5.9.0",
+		"vitest": "^4.1.10"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	}
+}
