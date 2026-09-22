@@ -9,7 +9,7 @@ so this loads alongside the upstream package without clashing with it.
 ## Install
 
 ```bash
-pi install npm:pi-background-tasks
+pi install npm:@milanglacier/pi-background-tasks
 ```
 
 ## What it provides
