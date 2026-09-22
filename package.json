@@ -1,6 +1,6 @@
 {
 	"name": "pi-background-tasks",
-	"version": "0.6.1",
+	"version": "0.6.2",
 	"description": "Reactive background shell tasks for pi with /bg, Ctrl+Shift+B, log viewing, and agent wakeups on output.",
 	"keywords": [
 		"automation",
