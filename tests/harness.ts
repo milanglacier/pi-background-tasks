@@ -177,7 +177,6 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 		},
 		{
 			selectedBg: 7,
-			scrollbarThumb: 7,
 			searchMatchBg: 7,
 			userMessageBg: 7,
 			customMessageBg: 7,
@@ -191,6 +190,12 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 
 	const sessionManager: SessionManager = {
 		buildContextEntries: () => [],
+		buildSessionProjection: () => ({
+			entries: [],
+			messages: [],
+			thinkingLevel: "off",
+			model: null,
+		}),
 		getBranch: () => [],
 		getCwd: () => process.cwd(),
 		getEntries: () => [],
@@ -291,6 +296,13 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 			const existing = handlers.get(event) ?? [];
 			existing.push(handler);
 			handlers.set(event, existing);
+			return () => {
+				const current = handlers.get(event) ?? [];
+				const index = current.indexOf(handler);
+				if (index >= 0) {
+					current.splice(index, 1);
+				}
+			};
 		},
 		registerCommand(name, options) {
 			commands.set(name, options);

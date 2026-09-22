@@ -26,17 +26,17 @@
 		"test:watch": "vitest"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-agent-core": ">=0.84.1",
-		"@earendil-works/pi-ai": ">=0.84.1",
-		"@earendil-works/pi-coding-agent": ">=0.84.1",
-		"@earendil-works/pi-tui": ">=0.84.1",
+		"@earendil-works/pi-agent-core": ">=0.87.0 <=0.100.0",
+		"@earendil-works/pi-ai": ">=0.87.0 <=0.100.0",
+		"@earendil-works/pi-coding-agent": ">=0.87.0 <=0.100.0",
+		"@earendil-works/pi-tui": ">=0.87.0 <=0.100.0",
 		"typebox": "^1.1.24"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "^0.84.1",
-		"@earendil-works/pi-ai": "^0.84.1",
-		"@earendil-works/pi-coding-agent": "^0.84.1",
-		"@earendil-works/pi-tui": "^0.84.1",
+		"@earendil-works/pi-agent-core": ">=0.87.0 <=0.100.0",
+		"@earendil-works/pi-ai": ">=0.87.0 <=0.100.0",
+		"@earendil-works/pi-coding-agent": ">=0.87.0 <=0.100.0",
+		"@earendil-works/pi-tui": ">=0.87.0 <=0.100.0",
 		"@types/node": "^26.1.0",
 		"typebox": "^1.1.24",
 		"typescript": "^5.9.0",
