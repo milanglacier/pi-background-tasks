@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 export const BG_COMMAND = "bg";
-export const BG_SHORTCUT = "ctrl+shift+b";
+export const BG_SHORTCUT = "ctrl+alt+b";
 export const BG_MESSAGE_TYPE = "milanglacier.background-tasks:event";
 export const BG_WIDGET_KEY = "milanglacier.background-tasks";
 export const BG_OUTPUT_SETTLE_MS = 1500;

@@ -20,10 +20,13 @@ This package turns explicit background shell commands into a first-class pi work
 - `bg_status`: compatibility tool for listing, tailing, and stopping tracked background tasks by PID
 - `bg_task`: richer LLM-callable tool for spawning, listing, tailing, stopping, and clearing tasks by id or PID
 - `/bg`: slash command for launching and managing background tasks manually
-- `Ctrl+Shift+B`: richer multi-pane dashboard overlay with a task list, metadata pane, and scrollable log tail
+- `Ctrl+Alt+B`: richer multi-pane dashboard overlay with a task list, metadata pane, and scrollable log tail
 - `/bg watch --follow <id>`: jump straight into the output pane for a task with follow-tail mode enabled
 - reactive follow-ups: pi can wake itself up when watched tasks emit new output or exit
 - persistent log files for every spawned task
+
+> [!NOTE]
+> The dashboard shortcut changed from `Ctrl+Shift+B` to `Ctrl+Alt+B`, because `Ctrl+Shift+B` doesn't work in most terminals.
 
 ## Example flows
 

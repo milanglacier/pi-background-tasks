@@ -144,9 +144,9 @@ describe("background tasks extension", () => {
 		await bg.handler("watch --follow bg-1", harness.ctx);
 		expect(custom).toHaveBeenCalledTimes(2);
 
-		const shortcut = harness.shortcuts.get("ctrl+shift+b");
+		const shortcut = harness.shortcuts.get("ctrl+alt+b");
 		if (!shortcut) {
-			expect.unreachable("expected the extension to register the ctrl+shift+b shortcut");
+			expect.unreachable("expected the extension to register the ctrl+alt+b shortcut");
 		}
 		await shortcut.handler(harness.ctx);
 		expect(custom).toHaveBeenCalledTimes(3);

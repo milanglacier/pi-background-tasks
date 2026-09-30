@@ -12,7 +12,7 @@ describe("background tasks runtime smoke tests", () => {
 		expect(harness.tools.has("bg_status")).toBe(true);
 		expect(harness.tools.has("bash")).toBe(false);
 		expect(harness.commands.has("bg")).toBe(true);
-		expect(harness.shortcuts.has("ctrl+shift+b")).toBe(true);
+		expect(harness.shortcuts.has("ctrl+alt+b")).toBe(true);
 		expect(harness.messageRenderers.has("milanglacier.background-tasks:event")).toBe(true);
 	});
 });
