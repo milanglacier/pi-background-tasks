@@ -4,6 +4,7 @@ import type {
 	EventBus,
 	ExtensionAPI,
 	ExtensionCommandContext,
+	ExtensionToolContext,
 	ExtensionUIContext,
 	MarkdownTransformer,
 	MessageRenderer,
@@ -45,7 +46,7 @@ export interface ExtensionHarness {
 	/** The real `ExtensionAPI` handed to the extension under test. */
 	pi: ExtensionAPI;
 	/** The real `ExtensionCommandContext` handed to command and shortcut handlers. */
-	ctx: ExtensionCommandContext;
+	ctx: ExtensionCommandContext & ExtensionToolContext;
 	tools: Map<string, RegisteredTool>;
 	commands: Map<string, CommandOptions>;
 	shortcuts: Map<string, ShortcutOptions>;
@@ -254,7 +255,9 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 		theme,
 	};
 
-	const ctx: ExtensionCommandContext = {
+	const ctx: ExtensionCommandContext & ExtensionToolContext = {
+		tools: [],
+		executeTool: async () => notImplemented("executeTool"),
 		abort() {},
 		compact() {},
 		cwd: process.cwd(),
@@ -291,7 +294,13 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 		getCommands: () => [],
 		getFlag: (name) => flags.get(name),
 		getSessionName: () => sessionName,
+		getSettings: () => ({}),
 		getThinkingLevel: () => thinkingLevel,
+		getMcpServers: () => [],
+		registerMcpServer() {},
+		unregisterMcpServer() {},
+		registerVirtualModel() {},
+		unregisterVirtualModel() {},
 		on(event: string, handler: (event: never, ctx: never) => unknown) {
 			const existing = handlers.get(event) ?? [];
 			existing.push(handler);
