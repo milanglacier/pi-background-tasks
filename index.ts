@@ -921,11 +921,11 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		);
 	};
 
-	const taskPromptOptions = () =>
+	const taskPromptOptions = (argumentHead: string) =>
 		getSortedTasks().map((task) => ({
 			description: `${summarizeTaskStatus(task.status, task.exitCode)} · ${task.command}`,
 			label: task.id,
-			value: task.id,
+			value: `${argumentHead} ${task.id}`,
 		}));
 
 	const resolveTask = (id?: string, pid?: number): ManagedTask | null => resolveTaskByToken(tasks.values(), id ?? pid);
@@ -1113,9 +1113,12 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		description:
 			"Manage background shell tasks: /bg, /bg run <cmd>, /bg stop <id>, /bg watch [--follow] <id>, /bg clear.",
 		getArgumentCompletions(prefix) {
+			// Pi replaces the whole argument string with the chosen `value`, so every
+			// `value` holds the full argument text, not just the last word.
 			const trimmed = prefix.trimStart();
+			const endsWithSpace = /\s$/.test(trimmed);
 			const parts = trimmed.split(/\s+/).filter(Boolean);
-			if (parts.length <= 1) {
+			if (parts.length === 0 || (parts.length === 1 && !endsWithSpace)) {
 				const options = [
 					{
 						description: "Open the background task dashboard",
@@ -1154,19 +1157,53 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 					},
 				];
 				const needle = trimmed.toLowerCase();
+				// A complete subcommand gets no popup, so Enter submits it.
+				if (options.some((option) => option.value === needle)) {
+					return null;
+				}
 				return options.filter((option) => option.value.trim().startsWith(needle));
 			}
 
-			const [subcommand, maybeFlag] = parts;
+			const [subcommand, ...rest] = parts;
 			if (!(subcommand === "watch" || subcommand === "stop" || subcommand === "log")) {
 				return null;
 			}
 
-			if (subcommand === "watch" && maybeFlag === "--follow") {
-				return taskPromptOptions();
+			const acceptsFollow = subcommand !== "stop";
+			const followOption = {
+				description: "Open the output pane with follow-tail enabled",
+				label: "--follow",
+				value: `${subcommand} --follow `,
+			};
+			let head = subcommand;
+			let args = rest;
+			if (acceptsFollow && args[0]?.startsWith("-")) {
+				if (args[0] === "--follow") {
+					head = `${subcommand} --follow`;
+					args = args.slice(1);
+				} else if (args.length === 1 && !endsWithSpace && "--follow".startsWith(args[0])) {
+					return [followOption];
+				} else {
+					return null;
+				}
 			}
 
-			return taskPromptOptions();
+			if (args.length > 1 || (args.length === 1 && endsWithSpace)) {
+				return null;
+			}
+
+			const needle = args[0] ?? "";
+			// A complete task id gets no popup, so Enter submits the command.
+			if (tasks.has(needle)) {
+				return null;
+			}
+
+			const options = taskPromptOptions(head).filter((option) => option.label.startsWith(needle));
+			// Before anything is typed after `watch`/`log`, offer the flag too.
+			if (acceptsFollow && head === subcommand && needle === "") {
+				options.unshift(followOption);
+			}
+			return options.length > 0 ? options : null;
 		},
 		handler: async (args, ctx) => {
 			activeCtx = ctx;

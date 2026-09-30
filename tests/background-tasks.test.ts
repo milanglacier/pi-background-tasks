@@ -152,6 +152,41 @@ describe("background tasks extension", () => {
 		expect(custom).toHaveBeenCalledTimes(3);
 	});
 
+	it("completes /bg arguments with the full argument text so the subcommand is kept", async () => {
+		spawnMock.mockReturnValueOnce(createMockChild()).mockReturnValueOnce(createMockChild());
+
+		const harness = await createExtensionHarness();
+		backgroundTasksExtension(harness.pi);
+		const tool = requireTool(harness.tools, "bg_task");
+		await runTool(tool, "tool-1", { action: "spawn", command: "sleep 100" }, harness.ctx);
+		await runTool(tool, "tool-2", { action: "spawn", command: "sleep 200" }, harness.ctx);
+
+		const complete = harness.commands.get("bg")?.getArgumentCompletions;
+		if (!complete) {
+			expect.unreachable("expected the /bg command to provide argument completions");
+		}
+		const values = async (prefix: string) => (await complete(prefix))?.map((item) => item.value) ?? null;
+
+		expect(await values("wa")).toEqual(["watch ", "watch --follow "]);
+		expect(await values("list")).toBeNull();
+
+		expect((await values("watch "))?.sort()).toEqual(["watch --follow ", "watch bg-1", "watch bg-2"]);
+		expect((await values("watch   "))?.[0]).toBe("watch --follow ");
+		expect((await values("watch --follow "))?.sort()).toEqual(["watch --follow bg-1", "watch --follow bg-2"]);
+		expect((await values("stop "))?.sort()).toEqual(["stop bg-1", "stop bg-2"]);
+		expect((await complete("stop "))?.map((item) => item.label).sort()).toEqual(["bg-1", "bg-2"]);
+
+		expect((await values("watch b"))?.sort()).toEqual(["watch bg-1", "watch bg-2"]);
+		expect(await values("watch x")).toBeNull();
+		expect(await values("watch bg-2")).toBeNull();
+		expect(await values("watch --follow bg-1")).toBeNull();
+		expect(await values("watch bg-3")).toBeNull();
+		expect(await values("watch --f")).toEqual(["watch --follow "]);
+		expect(await values("watch bg- extra")).toBeNull();
+		expect(await values("watch bg-1 ")).toBeNull();
+		expect(await values("run ")).toBeNull();
+	});
+
 	it("stops tracked tasks and clears finished ones", async () => {
 		const child = createMockChild();
 		spawnMock.mockReturnValueOnce(child);
