@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,16 @@ function toolText(result: AgentToolResult<unknown>): string {
 function isAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
-		return true;
+		// A zombie still has a PID, but it cannot run or respond to signals.
+		let state: string | undefined;
+		if (process.platform === "linux") {
+			const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+			// The parenthesized process name can itself contain spaces and parentheses.
+			state = stat.slice(stat.lastIndexOf(")") + 2)[0];
+		} else {
+			state = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim()[0];
+		}
+		return state !== undefined && state !== "Z" && state !== "X";
 	} catch {
 		return false;
 	}
@@ -62,7 +72,7 @@ describe.skipIf(process.platform === "win32")("stopping a task's process tree", 
 		return toolText(await tool.execute("tool", params, undefined, undefined, harness.ctx));
 	};
 
-	/** Spawns `command`, which must write a grandchild pid to `$PIDFILE`, and returns the task id and that pid. */
+	/** Spawns a command that publishes its grandchild PID after signal setup, and returns both IDs. */
 	const spawnTask = async (command: (pidFile: string) => string): Promise<{ id: string; grandchild: number }> => {
 		const pidFile = join(scratch, `grandchild-${++taskCount}.pid`);
 		const started = await runTool({ action: "spawn", command: command(pidFile), reactToOutput: false });
@@ -114,9 +124,10 @@ describe.skipIf(process.platform === "win32")("stopping a task's process tree", 
 	it(
 		"kills a surviving group member after the leader exits on SIGTERM",
 		async () => {
+			// The leader installs its trap before launch; the child publishes its own PID after ignoring TERM.
 			const { id, grandchild } = await spawnTask(
 				(pidFile) =>
-					`(trap '' TERM; exec sleep 300) >/dev/null 2>&1 & echo $! > ${pidFile}; trap 'exit 0' TERM; wait`,
+					`trap 'exit 0' TERM; sh -c 'trap "" TERM; echo $$ > "$1"; exec sleep 300' sh "${pidFile}" >/dev/null 2>&1 & wait`,
 			);
 
 			await runTool({ action: "stop", id });

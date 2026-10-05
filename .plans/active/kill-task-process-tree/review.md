@@ -45,4 +45,19 @@ The fix uses a per-instance shutdown flag to suppress task events, prevent sched
 - `git diff --check` passes.
 - A separate check with Pi's real loader/runtime spawned both a SIGTERM-responsive task and a SIGTERM-resistant task producing continuous output, emitted shutdown, and invalidated the runtime. After the grace period there were no uncaught exceptions or messages, both tasks were stopped, and the process-group registry was empty.
 
-P1 is addressed. The two P2 process-test fixture findings are unchanged and remain open; the original overall assessment above records the reviewed patch before this fix.
+P1 is addressed. The original overall assessment above records the reviewed patch before the fixes; the P2 resolutions are recorded below.
+
+## P2 fix summary
+
+- `tests/process-tree.test.ts` checks process state as well as PID existence. On Linux it reads `/proc/<pid>/stat`, parsing the state after the parenthesized process name; on other POSIX platforms it uses `ps`. Zombie (`Z`) and dead (`X`) processes count as terminated, while running, sleeping, and stopped processes still count as alive.
+- The leader-exits-first fixture installs the leader's SIGTERM handler before launching the child. A separate `sh` child installs its ignored SIGTERM disposition, publishes its own PID as the readiness signal, and then executes `sleep`. The test waits for that PID before stopping the group.
+
+### Verification
+
+- `npm run typecheck` passes.
+- `npm test` passes: 33 tests across four files.
+- All three process-tree tests pass under a Linux subreaper that leaves orphaned children unreaped during the tests. Three zombies were confirmed before the wrapper reaped them.
+- In 100 rapid-stop checks, the fixture's grandchild survived SIGTERM after readiness publication while its leader exited. No readiness races were observed.
+- `git diff --check` passes. The non-Linux `ps` fallback has not been tested on macOS in this environment.
+
+All three review findings are addressed. The original finding locations and overall assessment are retained as the record of the initial review.
