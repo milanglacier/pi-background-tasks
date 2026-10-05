@@ -56,8 +56,11 @@ export interface ExtensionHarness {
 	notifications: RecordedNotification[];
 	widgets: Map<string, WidgetContent | StringWidgetContent>;
 	statuses: Map<string, string | undefined>;
-	/** Dispatch a pi lifecycle event to every handler the extension registered for it. */
-	emit(event: string, payload: unknown): void;
+	/**
+	 * Dispatch a pi lifecycle event to every handler the extension registered for
+	 * it, and return what each handler returned.
+	 */
+	emit(event: string, payload: unknown): unknown[];
 }
 
 function notImplemented(name: string): never {
@@ -359,9 +362,7 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 			// `ExtensionAPI.on` is overloaded with a distinct payload type per event
 			// name. Dispatching by a runtime string cannot be resolved against those
 			// overloads, so the payload is widened here at the dispatch boundary only.
-			for (const handler of handlers.get(event) ?? []) {
-				handler(payload as never, ctx as never);
-			}
+			return (handlers.get(event) ?? []).map((handler) => handler(payload as never, ctx as never));
 		},
 		entryRenderers,
 		messageRenderers,

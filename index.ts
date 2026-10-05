@@ -31,7 +31,9 @@ import {
 	BG_MESSAGE_TYPE,
 	BG_OUTPUT_ALERT_MAX_CHARS,
 	BG_OUTPUT_SETTLE_MS,
+	BG_PGID_REGISTRY_SYMBOL,
 	BG_SHORTCUT,
+	BG_STOP_GRACE_MS,
 	BG_WIDGET_KEY,
 	buildTaskSummaryLine,
 	createBgProcessShellEnv,
@@ -41,6 +43,7 @@ import {
 	isBackgroundTaskEventDetails,
 	parseOutputMatcher,
 	resolveTaskByToken,
+	resolveTaskExpiry,
 	summarizeTaskStatus,
 	tailText,
 	taskDisplayName,
@@ -52,9 +55,12 @@ type ManagedTask = BackgroundTaskSnapshot & {
 	output: string;
 	lastAlertLength: number;
 	outputTimer: ReturnType<typeof setTimeout> | null;
+	expiryTimer: ReturnType<typeof setTimeout> | null;
 	matcher: ((text: string) => boolean) | null;
 	closed: boolean;
 	stopRequested: boolean;
+	/** Process group of the task, or null when the task is not a group leader. */
+	pgid: number | null;
 };
 
 interface SpawnTaskOptions {
@@ -71,6 +77,57 @@ interface SpawnTaskOptions {
 }
 
 type ThemeLike = Theme;
+
+interface PgidRegistry {
+	pgids: Set<number>;
+	killAll: () => void;
+}
+
+/**
+ * Returns the process-wide registry of task process groups that may still have
+ * live members. The first call installs an `exit` listener that sends SIGKILL to
+ * every registered group. The listener also runs when pi exits without emitting
+ * `session_shutdown`, for example after a terminal write error or a crash.
+ */
+function getPgidRegistry(): PgidRegistry {
+	const store = globalThis as unknown as Record<PropertyKey, PgidRegistry | undefined>;
+	const existing = store[BG_PGID_REGISTRY_SYMBOL];
+	if (existing) {
+		return existing;
+	}
+
+	const pgids = new Set<number>();
+	const registry: PgidRegistry = {
+		killAll() {
+			for (const pgid of pgids) {
+				try {
+					process.kill(-pgid, "SIGKILL");
+				} catch {
+					// The group is already gone.
+				}
+			}
+			pgids.clear();
+		},
+		pgids,
+	};
+	store[BG_PGID_REGISTRY_SYMBOL] = registry;
+	process.on("exit", registry.killAll);
+	return registry;
+}
+
+/**
+ * Sends a signal to the task's whole process group, or to its pid alone when it
+ * has no group. Returns false when the signal could not be delivered, usually
+ * because every target process has already exited.
+ */
+function signalTask(task: ManagedTask, signal: NodeJS.Signals): boolean {
+	try {
+		process.kill(task.pgid == null ? task.pid : -task.pgid, signal);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function taskSnapshot(task: ManagedTask): BackgroundTaskSnapshot {
 	return {
@@ -190,6 +247,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 	let requestWidgetRender: (() => void) | null = null;
 	let taskCounter = 0;
 	const tasks = new Map<string, ManagedTask>();
+	const pgidRegistry = getPgidRegistry();
 
 	const getSortedTasks = (): ManagedTask[] =>
 		[...tasks.values()].toSorted((left, right) => right.startedAt - left.startedAt);
@@ -216,22 +274,28 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		task.outputTimer = null;
 	};
 
+	const expireTask = (task: ManagedTask) => {
+		if (task.status !== "running" || task.stopRequested || task.expiresAt == null) {
+			return;
+		}
+		try {
+			appendFileSync(
+				task.logFile,
+				`\n[expired] Background task timed out after ${formatDuration(task.expiresAt - task.startedAt)}.\n`,
+			);
+		} catch {
+			// The task is stopped even when the log cannot record why.
+		}
+		terminateTask(task);
+	};
+
+	// Each task's expiry timer is the primary trigger. This check also catches a
+	// task whose timer has not fired yet although its deadline has passed.
 	const checkExpiredTasks = () => {
 		const now = Date.now();
 		for (const task of tasks.values()) {
-			if (task.status !== "running") {
-				continue;
-			}
 			if (task.expiresAt != null && now >= task.expiresAt) {
-				const remaining = getTaskOutput(task);
-				if (remaining.trim()) {
-					appendFileSync(
-						task.logFile,
-						`\n[expired] Background task timed out after ${formatDuration(task.expiresAt! - task.startedAt)}.\n`,
-					);
-				}
-				finalizeTask(task, task.exitCode, "stopped");
-				sendTaskEvent("exit", task);
+				expireTask(task);
 			}
 		}
 	};
@@ -406,6 +470,15 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		task.updatedAt = Date.now();
 		task.exitCode = exitCode;
 		clearOutputTimer(task);
+		if (task.expiryTimer) {
+			clearTimeout(task.expiryTimer);
+			task.expiryTimer = null;
+		}
+		// A stopping task keeps its group registered until its SIGKILL timer fires,
+		// because other members of the group can outlive the leader.
+		if (task.pgid != null && !task.stopRequested) {
+			pgidRegistry.pgids.delete(task.pgid);
+		}
 
 		if (statusOverride) {
 			task.status = statusOverride;
@@ -418,6 +491,35 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		sendTaskEvent("exit", task);
 		refreshUi();
 		return task;
+	};
+
+	/**
+	 * Sends SIGTERM to the task's process group, then SIGKILL after the grace
+	 * period. The SIGKILL is unconditional: `close` only means the pipes held by
+	 * the extension are closed, while other members of the group can still be
+	 * alive. The task becomes `stopped` when `close` arrives. Repeated calls on a
+	 * stopping task do nothing.
+	 */
+	const terminateTask = (task: ManagedTask) => {
+		if (task.stopRequested) {
+			return;
+		}
+		task.stopRequested = true;
+		task.updatedAt = Date.now();
+		clearOutputTimer(task);
+
+		if (!(task.pid > 0 && signalTask(task, "SIGTERM"))) {
+			// No process received the signal, so `close` may never arrive.
+			finalizeTask(task, task.exitCode, "stopped");
+		}
+		if (task.pid > 0) {
+			setTimeout(() => {
+				signalTask(task, "SIGKILL");
+				if (task.pgid != null) {
+					pgidRegistry.pgids.delete(task.pgid);
+				}
+			}, BG_STOP_GRACE_MS).unref();
+		}
 	};
 
 	const stopTask = (task: ManagedTask | null): { ok: boolean; message: string } => {
@@ -435,20 +537,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 			};
 		}
 
-		task.stopRequested = true;
-		task.updatedAt = Date.now();
-		clearOutputTimer(task);
-
-		if (task.pid > 0) {
-			try {
-				process.kill(task.pid, "SIGTERM");
-			} catch {
-				finalizeTask(task, task.exitCode, "stopped");
-			}
-		} else {
-			finalizeTask(task, task.exitCode, "stopped");
-		}
-
+		terminateTask(task);
 		refreshUi();
 		return { message: `Stopping ${task.id} (${task.command}).`, ok: true };
 	};
@@ -462,16 +551,21 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		const reactToOutput = options.reactToOutput ?? true;
 		const notifyPattern = options.notifyPattern?.trim() || undefined;
 		const expiresAt = options.expiresAt !== undefined ? options.expiresAt : Date.now() + BG_DEFAULT_TIMEOUT_MS;
+		// On POSIX the task leads its own process group, so stopping it can signal
+		// every process it started. On Windows `detached` opens a new console instead.
+		const ownGroup = !options.child && process.platform !== "win32";
 		const child =
 			options.child ??
 			(() => {
 				const { shell, args } = getShellConfig();
 				return spawn(shell, [...args, command], {
 					cwd,
+					detached: ownGroup,
 					env: createBgProcessShellEnv(),
 					stdio: ["ignore", "pipe", "pipe"],
 				});
 			})();
+		const pgid = ownGroup && child.pid ? child.pid : null;
 		const initialOutput = options.initialOutput ?? "";
 		const initialBuffer = trimOutputBuffer(initialOutput, options.initialLastAlertLength ?? initialOutput.length);
 
@@ -484,6 +578,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 			cwd,
 			exitCode: null,
 			expiresAt,
+			expiryTimer: null,
 			id,
 			lastAlertLength: initialBuffer.lastAlertLength,
 			lastOutputAt: initialOutput.trim().length > 0 ? Date.now() : null,
@@ -493,6 +588,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 			output: initialBuffer.output,
 			outputBytes: Buffer.byteLength(initialOutput),
 			outputTimer: null,
+			pgid,
 			pid: child.pid ?? 0,
 			reactToOutput,
 			startedAt: Date.now(),
@@ -502,6 +598,20 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 			updatedAt: Date.now(),
 		};
 		tasks.set(task.id, task);
+		if (pgid != null) {
+			pgidRegistry.pgids.add(pgid);
+		}
+		if (expiresAt != null) {
+			task.expiryTimer = setTimeout(
+				() => {
+					task.expiryTimer = null;
+					expireTask(task);
+					refreshUi();
+				},
+				Math.max(0, expiresAt - Date.now()),
+			);
+			task.expiryTimer.unref();
+		}
 
 		const handleChunk = (chunk: Buffer) => {
 			const text = chunk.toString();
@@ -969,22 +1079,19 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		syncWidget(ctx);
 	});
 
+	// Stays synchronous so it never delays pi's exit. If pi exits next, the
+	// `exit` listener sends SIGKILL to the groups at once; otherwise each task's
+	// grace timer does.
 	pi.on("session_shutdown", () => {
+		// Remove the widget first so nothing renders to a terminal that may be gone,
+		// and drop the context so later task events do not install it again.
+		clearWidget();
+		activeCtx = null;
 		for (const task of tasks.values()) {
-			if (task.status !== "running") {
-				continue;
-			}
-			task.stopRequested = true;
-			clearOutputTimer(task);
-			if (task.pid > 0) {
-				try {
-					process.kill(task.pid, "SIGTERM");
-				} catch {
-					finalizeTask(task, task.exitCode, "stopped");
-				}
+			if (task.status === "running") {
+				terminateTask(task);
 			}
 		}
-		clearWidget();
 	});
 
 	pi.registerTool({
@@ -1024,7 +1131,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		description:
-			"Spawn, inspect, and stop background shell tasks. Tasks keep running after the tool returns, append output to a log file, and can wake the agent up when new output arrives or when the task exits. Background tasks expire after 10 minutes by default to prevent indefinite runs. Pass expiresAt=null to disable the expiry.",
+			"Spawn, inspect, and stop background shell tasks. Tasks keep running after the tool returns, append output to a log file, and can wake the agent up when new output arrives or when the task exits. A task is stopped 10 minutes after it starts by default. Set timeoutSeconds to change that, or to 0 for servers, watchers, and other tasks that should run until they are stopped.",
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx): Promise<AgentToolResult<unknown>> {
 			const { action } = params;
 
@@ -1046,12 +1153,20 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 					});
 				}
 
+				const expiry = resolveTaskExpiry(params.timeoutSeconds);
+				if ("error" in expiry) {
+					return makeToolResult(`Error: invalid timeoutSeconds. ${expiry.error}`, {
+						isError: true,
+					});
+				}
+
 				const task = spawnTask({
 					command,
 					title: params.title,
 					cwd: params.cwd,
 					reactToOutput: params.reactToOutput,
 					notifyPattern: params.notifyPattern,
+					expiresAt: expiry.expiresAt,
 				});
 
 				return makeToolResult(
@@ -1106,12 +1221,18 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 					description: "Optional substring or /regex/flags gate for output wakeups.",
 				}),
 			),
+			timeoutSeconds: Type.Optional(
+				Type.Number({
+					description:
+						"Seconds after the start at which the task is stopped, for action=spawn. Defaults to 600. 0 disables expiry.",
+				}),
+			),
 		}),
 	});
 
 	pi.registerCommand(BG_COMMAND, {
 		description:
-			"Manage background shell tasks: /bg, /bg run <cmd>, /bg stop <id>, /bg watch [--follow] <id>, /bg clear.",
+			"Manage background shell tasks: /bg, /bg run [--timeout <seconds>] <cmd>, /bg stop <id>, /bg watch [--follow] <id>, /bg clear.",
 		getArgumentCompletions(prefix) {
 			// Pi replaces the whole argument string with the chosen `value`, so every
 			// `value` holds the full argument text, not just the last word.
@@ -1134,6 +1255,11 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 						description: "Spawn a new background shell task",
 						label: "run",
 						value: "run ",
+					},
+					{
+						description: "Spawn a task that is stopped after the given seconds (0 for never)",
+						label: "run --timeout",
+						value: "run --timeout ",
 					},
 					{
 						description: "Open the dashboard focused on a task",
@@ -1226,13 +1352,30 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 			}
 
 			if (trimmed.startsWith("run ")) {
-				const command = trimmed.slice(4).trim();
+				const usage = `Usage: /${BG_COMMAND} run [--timeout <seconds>] <command>`;
+				let command = trimmed.slice(4).trim();
+				let timeoutSeconds: number | undefined;
+				// `--timeout` counts only directly after `run`, so a command keeps its own flags.
+				if (/^--timeout(?:\s|=|$)/.test(command)) {
+					const match = command.match(/^--timeout\s+(\S+)\s+(.+)$/s);
+					if (!match?.[1] || !match[2]) {
+						ctx.ui.notify(usage, "warning");
+						return;
+					}
+					timeoutSeconds = Number(match[1]);
+					command = match[2].trim();
+				}
 				if (!command) {
-					ctx.ui.notify(`Usage: /${BG_COMMAND} run <command>`, "warning");
+					ctx.ui.notify(usage, "warning");
+					return;
+				}
+				const expiry = resolveTaskExpiry(timeoutSeconds);
+				if ("error" in expiry) {
+					ctx.ui.notify(`${expiry.error}\n${usage}`, "warning");
 					return;
 				}
 
-				const task = spawnTask({ command, cwd: ctx.cwd });
+				const task = spawnTask({ command, cwd: ctx.cwd, expiresAt: expiry.expiresAt });
 				ctx.ui.notify(`Started ${task.id} (pid ${task.pid}) in the background.`, "info");
 				return;
 			}
@@ -1258,7 +1401,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 			}
 
 			ctx.ui.notify(
-				`Unknown /${BG_COMMAND} action. Try /${BG_COMMAND}, /${BG_COMMAND} run <command>, /${BG_COMMAND} watch [--follow] <id>, /${BG_COMMAND} stop <id>, or /${BG_COMMAND} clear.`,
+				`Unknown /${BG_COMMAND} action. Try /${BG_COMMAND}, /${BG_COMMAND} run [--timeout <seconds>] <command>, /${BG_COMMAND} watch [--follow] <id>, /${BG_COMMAND} stop <id>, or /${BG_COMMAND} clear.`,
 				"warning",
 			);
 		},

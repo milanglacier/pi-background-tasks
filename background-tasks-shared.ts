@@ -14,6 +14,16 @@ export const BG_DASHBOARD_WIDTH = 96;
 export const BG_DASHBOARD_MAX_HEIGHT = "80%";
 export const BG_DEFAULT_TIMEOUT_MS = 10 * 60_000;
 export const BG_INSTALL_SYMBOL = Symbol.for("milanglacier.background-tasks.installed");
+/** Longest timeout a task can have, because `setTimeout` runs longer delays after 1 ms. */
+export const BG_MAX_TIMEOUT_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
+/** Delay between the SIGTERM and the SIGKILL sent to a stopping task's process group. */
+export const BG_STOP_GRACE_MS = 5000;
+/**
+ * Key of the process-wide registry of live task process groups. It lives on
+ * `globalThis` so that every loaded copy of the extension shares one registry
+ * and one `exit` listener.
+ */
+export const BG_PGID_REGISTRY_SYMBOL = Symbol.for("milanglacier.background-tasks.pgids");
 
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
 
@@ -60,6 +70,27 @@ export function createBgProcessShellEnv(
 		...env,
 		[pathKey]: updatedPath,
 	};
+}
+
+/**
+ * Converts a task timeout in seconds into the time at which the task expires.
+ * An omitted timeout gives the default, and 0 gives `null`, which means the
+ * task never expires. Returns an error message for any other value that is not
+ * a number of seconds between 0 and `BG_MAX_TIMEOUT_SECONDS`.
+ */
+export function resolveTaskExpiry(
+	timeoutSeconds: number | undefined,
+	now: number = Date.now(),
+): { expiresAt: number | null } | { error: string } {
+	if (timeoutSeconds === undefined) {
+		return { expiresAt: now + BG_DEFAULT_TIMEOUT_MS };
+	}
+	if (!(Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0 && timeoutSeconds <= BG_MAX_TIMEOUT_SECONDS)) {
+		return {
+			error: `The timeout must be a number of seconds from 0 to ${BG_MAX_TIMEOUT_SECONDS}. Use 0 for no expiry.`,
+		};
+	}
+	return { expiresAt: timeoutSeconds === 0 ? null : now + timeoutSeconds * 1000 };
 }
 
 export function getBgProcessLogFilePath(

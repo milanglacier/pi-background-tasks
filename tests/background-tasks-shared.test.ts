@@ -2,6 +2,8 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+	BG_DEFAULT_TIMEOUT_MS,
+	BG_MAX_TIMEOUT_SECONDS,
 	buildTaskSummaryLine,
 	createBgProcessShellEnv,
 	formatDuration,
@@ -10,6 +12,7 @@ import {
 	isBackgroundTaskEventDetails,
 	parseOutputMatcher,
 	resolveTaskByToken,
+	resolveTaskExpiry,
 	summarizeTaskStatus,
 	tailText,
 	taskDisplayName,
@@ -124,5 +127,21 @@ describe("background task shared helpers", () => {
 		expect(resolveTaskByToken(tasks, "bg-2")).toBe(tasks[1]);
 		expect(resolveTaskByToken(tasks, 123)).toBe(tasks[0]);
 		expect(resolveTaskByToken(tasks, "999")).toBeNull();
+	});
+
+	it("resolves a timeout in seconds into an expiry time", () => {
+		const now = 1_000_000;
+		expect(resolveTaskExpiry(undefined, now)).toEqual({ expiresAt: now + BG_DEFAULT_TIMEOUT_MS });
+		expect(resolveTaskExpiry(0, now)).toEqual({ expiresAt: null });
+		expect(resolveTaskExpiry(30, now)).toEqual({ expiresAt: now + 30_000 });
+		expect(resolveTaskExpiry(0.5, now)).toEqual({ expiresAt: now + 500 });
+		expect(resolveTaskExpiry(BG_MAX_TIMEOUT_SECONDS, now)).toEqual({
+			expiresAt: now + BG_MAX_TIMEOUT_SECONDS * 1000,
+		});
+		expect(BG_MAX_TIMEOUT_SECONDS * 1000).toBeLessThanOrEqual(2 ** 31 - 1);
+
+		for (const invalid of [-1, Number.NaN, Number.POSITIVE_INFINITY, BG_MAX_TIMEOUT_SECONDS + 1]) {
+			expect(resolveTaskExpiry(invalid, now)).toEqual({ error: expect.stringContaining("Use 0 for no expiry") });
+		}
 	});
 });

@@ -33,12 +33,17 @@ This package turns explicit background shell commands into a first-class pi work
 ```text
 /bg run gh pr checks 123 --watch
 /bg run pnpm test --watch
+/bg run --timeout 0 pnpm dev
 /bg watch bg-1
 /bg watch --follow bg-1
 /bg stop bg-1
 ```
 
 The `bg_task` tool lets the agent start tasks explicitly and optionally gate wakeups with a substring or `/regex/flags` pattern.
+
+A task is stopped 10 minutes after it starts by default. Set a different timeout in seconds with `timeoutSeconds` on
+`bg_task` or `--timeout <seconds>` directly after `/bg run`. A timeout of `0` lets the task run until it is stopped,
+which suits servers and watchers.
 
 The dashboard supports:
 
@@ -51,6 +56,14 @@ The dashboard supports:
 ## Notes
 
 - tasks are tracked for the current pi runtime and cleaned up on session shutdown
+- on Linux and macOS, every task runs in its own process group. Stopping a task or letting it expire sends
+  `SIGTERM` to the whole group, then `SIGKILL` 5 seconds later, so processes the task started are stopped too
+- when pi exits, running tasks get `SIGTERM` and then `SIGKILL` almost immediately, so a task may not get to exit
+  gracefully
+- tasks have no controlling terminal, so they do not receive terminal hangups directly. pi stops them when the
+  terminal closes
+- processes that a task leaves behind after it finishes on its own keep running
+- tasks keep running if pi itself is killed with `SIGKILL`
 - every task writes output to a log file so you can inspect recent activity even after the command returns
 - use `bg_task` or `/bg` for servers, watchers, PR checks, and other commands you want to keep running after the tool returns
 - `reactToOutput` defaults to `true`, so long-lived watchers like `gh ... --watch` can wake the agent when new output arrives
