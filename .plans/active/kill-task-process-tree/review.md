@@ -61,3 +61,15 @@ P1 is addressed. The original overall assessment above records the reviewed patc
 - `git diff --check` passes. The non-Linux `ps` fallback has not been tested on macOS in this environment.
 
 All three review findings are addressed. The original finding locations and overall assessment are retained as the record of the initial review.
+
+# Second review round
+
+## Findings
+
+No findings.
+
+## Overall assessment
+
+**Verdict:** Patch is correct.
+
+**Explanation:** Reviewed the current changes through `1719d89` against the merge base with `main`, `b2f7ca8`, including the plan, implementation, tests, and Pi lifecycle integration. The implementation matches the plan's stated scope, and all three first-round findings are addressed; an independent lifecycle review found no additional actionable defects. `npm run typecheck`, all 33 tests, and `git diff --check b2f7ca8` pass; the three real-process tests also pass under a Linux subreaper that leaves adopted descendants unreaped until the suite completes.
