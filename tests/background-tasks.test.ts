@@ -241,6 +241,69 @@ describe("background tasks extension", () => {
 		expect(toolText(clearResult)).toContain("Removed 1 finished");
 	});
 
+	it.each(["quit", "reload", "new", "resume", "fork"])(
+		"finalizes a task without notifying the old runtime after %s shutdown",
+		async (reason) => {
+			const child = createMockChild();
+			spawnMock.mockReturnValueOnce(child);
+			const harness = await createExtensionHarness();
+			backgroundTasksExtension(harness.pi);
+			const tool = requireTool(harness.tools, "bg_task");
+			await runTool(tool, "spawn", { action: "spawn", command: "sleep 300", timeoutSeconds: 0 }, harness.ctx);
+
+			harness.emit("session_shutdown", { type: "session_shutdown", reason });
+			const sendMessage = vi.spyOn(harness.pi, "sendMessage").mockImplementation(() => {
+				throw new Error("This extension ctx is stale after session replacement or reload.");
+			});
+
+			expect(() => child.emit("close", null)).not.toThrow();
+			expect(sendMessage).not.toHaveBeenCalled();
+			expect(toolText(await runTool(tool, "list", { action: "list" }, harness.ctx))).toContain("bg-1 · stopped");
+
+			await vi.advanceTimersByTimeAsync(BG_STOP_GRACE_MS);
+			const target = process.platform === "win32" ? child.pid : -child.pid;
+			expect(killSpy.mock.calls).toEqual([
+				[target, "SIGTERM"],
+				[target, "SIGKILL"],
+			]);
+			expect(vi.getTimerCount()).toBe(0);
+		},
+	);
+
+	it("clears queued output reactions and ignores late output while shutdown cleanup continues", async () => {
+		const child = createMockChild();
+		spawnMock.mockReturnValueOnce(child);
+		const harness = await createExtensionHarness();
+		backgroundTasksExtension(harness.pi);
+		const tool = requireTool(harness.tools, "bg_task");
+		await runTool(tool, "spawn", { action: "spawn", command: "sleep 300", timeoutSeconds: 0 }, harness.ctx);
+		await runTool(tool, "stop", { action: "stop", id: "bg-1" }, harness.ctx);
+		// A stopping task can still produce output before session shutdown.
+		child.stdout.emit("data", Buffer.from("still stopping\n"));
+		expect(vi.getTimerCount()).toBe(2);
+
+		harness.emit("session_shutdown", { type: "session_shutdown", reason: "reload" });
+		const sendMessage = vi.spyOn(harness.pi, "sendMessage").mockImplementation(() => {
+			throw new Error("This extension ctx is stale after session replacement or reload.");
+		});
+		expect(vi.getTimerCount()).toBe(1);
+		child.stdout.emit("data", Buffer.from("late stdout\n"));
+		child.stderr.emit("data", Buffer.from("late stderr\n"));
+		expect(vi.getTimerCount()).toBe(1);
+		expect(toolText(await runTool(tool, "log", { action: "log", id: "bg-1" }, harness.ctx))).toContain("late stderr");
+
+		await vi.advanceTimersByTimeAsync(BG_STOP_GRACE_MS - 1);
+		expect(killSpy).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		const target = process.platform === "win32" ? child.pid : -child.pid;
+		expect(killSpy).toHaveBeenLastCalledWith(target, "SIGKILL");
+		expect(() => child.emit("close", null)).not.toThrow();
+		expect(sendMessage).not.toHaveBeenCalled();
+		expect(toolText(await runTool(tool, "list", { action: "list" }, harness.ctx))).toContain("bg-1 · stopped");
+		expect(pgidRegistry().pgids.has(child.pid)).toBe(false);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	describe.skipIf(process.platform === "win32")("process groups", () => {
 		it("sends SIGTERM to the group on stop and SIGKILL after the grace period, even after close", async () => {
 			const child = createMockChild();

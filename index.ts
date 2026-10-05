@@ -244,6 +244,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 	installedPi[BG_INSTALL_SYMBOL] = true;
 
 	let activeCtx: ExtensionContext | null = null;
+	let hasShutdown = false;
 	let requestWidgetRender: (() => void) | null = null;
 	let taskCounter = 0;
 	const tasks = new Map<string, ManagedTask>();
@@ -405,6 +406,9 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 		task: ManagedTask,
 		options: { newOutputTail?: string | undefined; matchedPattern?: string | undefined } = {},
 	) => {
+		if (hasShutdown) {
+			return;
+		}
 		const details: BackgroundTaskEventDetails = {
 			eventAt: Date.now(),
 			eventType,
@@ -430,13 +434,16 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 	};
 
 	const scheduleOutputReaction = (task: ManagedTask) => {
-		if (!task.reactToOutput || task.status !== "running") {
+		if (hasShutdown || !task.reactToOutput || task.status !== "running") {
 			return;
 		}
 
 		clearOutputTimer(task);
 		task.outputTimer = setTimeout(() => {
 			task.outputTimer = null;
+			if (hasShutdown) {
+				return;
+			}
 			const unseenOutput = getTaskOutput(task).slice(task.lastAlertLength);
 			if (!unseenOutput.trim()) {
 				task.lastAlertLength = getTaskOutput(task).length;
@@ -1083,11 +1090,14 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 	// `exit` listener sends SIGKILL to the groups at once; otherwise each task's
 	// grace timer does.
 	pi.on("session_shutdown", () => {
+		// Child callbacks can outlive the runtime, whose API is invalidated on reload or session replacement.
+		hasShutdown = true;
 		// Remove the widget first so nothing renders to a terminal that may be gone,
 		// and drop the context so later task events do not install it again.
 		clearWidget();
 		activeCtx = null;
 		for (const task of tasks.values()) {
+			clearOutputTimer(task);
 			if (task.status === "running") {
 				terminateTask(task);
 			}
