@@ -330,6 +330,7 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 			messageRenderers.set(customType, renderer as MessageRenderer);
 		},
 		registerProvider() {},
+		registerToolRenderer() {},
 		registerShortcut(shortcut, options) {
 			shortcuts.set(shortcut, options);
 		},
