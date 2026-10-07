@@ -72,6 +72,36 @@ export function createBgProcessShellEnv(
 	};
 }
 
+export interface BackgroundTaskSessionValues {
+	sessionId: string;
+	sessionFile?: string | undefined;
+	provider?: string | undefined;
+	model?: string | undefined;
+	thinkingLevel?: string | undefined;
+}
+
+export function createBgProcessSessionEnv(
+	env: NodeJS.ProcessEnv,
+	session?: BackgroundTaskSessionValues,
+): NodeJS.ProcessEnv {
+	const taskEnv = { ...env };
+	delete taskEnv["PI_SESSION_ID"];
+	delete taskEnv["PI_SESSION_FILE"];
+	delete taskEnv["PI_PROVIDER"];
+	delete taskEnv["PI_MODEL"];
+	delete taskEnv["PI_REASONING_LEVEL"];
+
+	if (session) {
+		taskEnv["PI_SESSION_ID"] = session.sessionId;
+		if (session.sessionFile) taskEnv["PI_SESSION_FILE"] = session.sessionFile;
+		if (session.provider !== undefined) taskEnv["PI_PROVIDER"] = session.provider;
+		if (session.model !== undefined) taskEnv["PI_MODEL"] = session.model;
+		if (session.thinkingLevel) taskEnv["PI_REASONING_LEVEL"] = session.thinkingLevel;
+	}
+
+	return taskEnv;
+}
+
 /**
  * Converts a task timeout in seconds into the time at which the task expires.
  * An omitted timeout gives the default, and 0 gives `null`, which means the

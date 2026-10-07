@@ -55,6 +55,9 @@ The dashboard supports:
 
 ## Notes
 
+- `bg_task` and `/bg run` set `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL`
+  from the session that starts the task. Values stay fixed for that task; missing values are omitted, not inherited
+  from a parent session. This matches the built-in `bash` defaults, regardless of bash-specific settings or customizations.
 - tasks are tracked for the current pi runtime and cleaned up on session shutdown
 - on Linux and macOS, every task runs in its own process group. Stopping a task or letting it expire sends
   `SIGTERM` to the whole group, then `SIGKILL` 5 seconds later, so processes the task started are stopped too

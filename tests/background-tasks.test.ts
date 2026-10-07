@@ -1,6 +1,7 @@
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
+import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
@@ -11,7 +12,7 @@ import {
 	BG_STOP_GRACE_MS,
 	isBackgroundTaskEventDetails,
 } from "../background-tasks-shared.js";
-import { createExtensionHarness } from "./harness.js";
+import { createExtensionHarness, type ExtensionHarness } from "./harness.js";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -85,6 +86,28 @@ function requireTool(tools: Map<string, ToolDefinition>, name: string): ToolDefi
 	return tool;
 }
 
+const inheritedSessionEnv = {
+	PI_SESSION_ID: "parent-session",
+	PI_SESSION_FILE: "/parent/session.jsonl",
+	PI_PROVIDER: "parent-provider",
+	PI_MODEL: "parent-model",
+	PI_REASONING_LEVEL: "high",
+};
+
+function stubSessionEnv(inherited: boolean): void {
+	for (const [key, value] of Object.entries(inheritedSessionEnv)) {
+		vi.stubEnv(key, inherited ? value : undefined);
+	}
+}
+
+function spawnedEnv(callIndex = 0): NodeJS.ProcessEnv {
+	const options = spawnMock.mock.calls[callIndex]?.[2] as SpawnOptions | undefined;
+	if (!options?.env) {
+		expect.unreachable("expected spawn to receive an environment");
+	}
+	return options.env;
+}
+
 describe("background tasks extension", () => {
 	// The mock children have made-up pids, so no signal may reach a real process.
 	let killSpy: MockInstance<typeof process.kill>;
@@ -98,8 +121,99 @@ describe("background tasks extension", () => {
 		// Forget the made-up groups so the exit listener never signals them.
 		(globalThis as unknown as Record<PropertyKey, PgidRegistry | undefined>)[BG_PGID_REGISTRY_SYMBOL]?.pgids.clear();
 		vi.restoreAllMocks();
+		vi.unstubAllEnvs();
 		vi.clearAllMocks();
 		vi.useRealTimers();
+	});
+
+	describe.each(["bg_task", "/bg run"] as const)("%s session environment", (path) => {
+		async function startTask(harness: ExtensionHarness, ctx: ExtensionHarness["ctx"]): Promise<void> {
+			spawnMock.mockReturnValueOnce(createMockChild());
+			if (path === "bg_task") {
+				await runTool(requireTool(harness.tools, "bg_task"), "spawn", { action: "spawn", command: "env" }, ctx);
+			} else {
+				const bg = harness.commands.get("bg");
+				if (!bg) expect.unreachable("expected a /bg command");
+				await bg.handler("run env", ctx);
+			}
+		}
+
+		it.each([false, true])("resolves each spawn from its initiating context (inherited values: %s)", async (inherited) => {
+			stubSessionEnv(inherited);
+			const harness = await createExtensionHarness();
+			backgroundTasksExtension(harness.pi);
+			// The lifecycle context differs from the context initiating each task.
+			harness.emit("session_start", { type: "session_start" });
+
+			for (const [index, thinkingLevel] of (["off", "medium"] as const).entries()) {
+				const ctx: ExtensionHarness["ctx"] = {
+					...harness.ctx,
+					sessionManager: {
+						...harness.ctx.sessionManager,
+						getSessionId: () => `session-${index}`,
+						getSessionFile: () => `/sessions/${index}.jsonl`,
+					},
+					model: {
+						id: `model-${index}`,
+						provider: `provider-${index}`,
+						name: "Test model",
+						api: "anthropic-messages",
+						baseUrl: "https://example.com",
+						input: ["text"],
+						reasoning: true,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 1000,
+						maxTokens: 100,
+					},
+					thinkingLevel,
+				};
+				await startTask(harness, ctx);
+				expect(spawnedEnv(index)).toMatchObject({
+					PI_SESSION_ID: `session-${index}`,
+					PI_SESSION_FILE: `/sessions/${index}.jsonl`,
+					PI_PROVIDER: `provider-${index}`,
+					PI_MODEL: `model-${index}`,
+					PI_REASONING_LEVEL: thinkingLevel,
+				});
+			}
+			// Starting the second task does not change the first task's environment.
+			expect(spawnedEnv(0)).toMatchObject({ PI_MODEL: "model-0", PI_REASONING_LEVEL: "off" });
+		});
+
+		it("removes inherited optional values when the context has no sources for them", async () => {
+			stubSessionEnv(true);
+			const harness = await createExtensionHarness();
+			backgroundTasksExtension(harness.pi);
+			delete harness.ctx.thinkingLevel;
+			await startTask(harness, harness.ctx);
+
+			const env = spawnedEnv();
+			expect(env["PI_SESSION_ID"]).toBe("harness-session");
+			for (const key of ["PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) {
+				expect(env).not.toHaveProperty(key);
+			}
+		});
+	});
+
+	it("removes inherited session values when a tool call has no context, even with an active lifecycle context", async () => {
+		stubSessionEnv(true);
+		spawnMock.mockReturnValueOnce(createMockChild());
+		const harness = await createExtensionHarness();
+		backgroundTasksExtension(harness.pi);
+		harness.emit("session_start", { type: "session_start" });
+		const tool = requireTool(harness.tools, "bg_task");
+		// Pi supplies a context; omit it here to exercise the runtime fallback.
+		await tool.execute(
+			"spawn",
+			{ action: "spawn", command: "env" },
+			undefined,
+			undefined,
+			undefined as unknown as Parameters<ToolDefinition["execute"]>[4],
+		);
+
+		for (const key of Object.keys(inheritedSessionEnv)) {
+			expect(spawnedEnv()).not.toHaveProperty(key);
+		}
 	});
 
 	it("spawns tasks, tails logs, reacts to output, and reports completion", async () => {

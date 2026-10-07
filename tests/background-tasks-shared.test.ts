@@ -6,6 +6,7 @@ import {
 	BG_MAX_TIMEOUT_SECONDS,
 	buildTaskSummaryLine,
 	createBgProcessShellEnv,
+	createBgProcessSessionEnv,
 	formatDuration,
 	formatRelativeTime,
 	getBgProcessLogFilePath,
@@ -18,6 +19,65 @@ import {
 	taskDisplayName,
 	trimOutputBuffer,
 } from "../background-tasks-shared.js";
+
+describe("background task session environment", () => {
+	const inherited = {
+		PI_SESSION_ID: "parent-session",
+		PI_SESSION_FILE: "/parent/session.jsonl",
+		PI_PROVIDER: "parent-provider",
+		PI_MODEL: "parent-model",
+		PI_REASONING_LEVEL: "high",
+	};
+	const session = {
+		sessionId: "current-session",
+		sessionFile: "/current/session.jsonl",
+		provider: "current-provider",
+		model: "current-model",
+		thinkingLevel: "off",
+	};
+	const expected = {
+		PI_SESSION_ID: session.sessionId,
+		PI_SESSION_FILE: session.sessionFile,
+		PI_PROVIDER: session.provider,
+		PI_MODEL: session.model,
+		PI_REASONING_LEVEL: session.thinkingLevel,
+	};
+
+	it.each([{}, inherited])("sets session values without changing other variables or the managed PATH (%j)", (base) => {
+		const env = createBgProcessShellEnv({ ...base, Path: "/usr/bin", OTHER: "kept" }, "/mock-home/.pi/agent");
+		const original = { ...env };
+		const result = createBgProcessSessionEnv(env, session);
+
+		expect(result).toEqual({ ...expected, Path: env["Path"], OTHER: "kept" });
+		expect(result["Path"]?.split(delimiter)[0]).toBe(join("/mock-home/.pi/agent", "bin"));
+		expect(result).not.toBe(env);
+		expect(env).toEqual(original);
+	});
+
+	it("removes all inherited session values when no context is available", () => {
+		expect(createBgProcessSessionEnv({ ...inherited, OTHER: "kept" })).toEqual({ OTHER: "kept" });
+	});
+
+	it("omits all optional values when their sources are missing", () => {
+		expect(createBgProcessSessionEnv(inherited, { sessionId: session.sessionId })).toEqual({
+			PI_SESSION_ID: session.sessionId,
+		});
+	});
+
+	it.each([
+		{ missing: { sessionFile: undefined }, removed: ["PI_SESSION_FILE"] },
+		{ missing: { provider: undefined, model: undefined }, removed: ["PI_PROVIDER", "PI_MODEL"] },
+		{ missing: { thinkingLevel: undefined }, removed: ["PI_REASONING_LEVEL"] },
+	])("removes inherited values when $removed have no source", ({ missing, removed }) => {
+		const result = createBgProcessSessionEnv(inherited, { ...session, ...missing });
+		const remaining: NodeJS.ProcessEnv = { ...expected };
+		for (const key of removed) {
+			delete remaining[key];
+			expect(result).not.toHaveProperty(key);
+		}
+		expect(result).toEqual(remaining);
+	});
+});
 
 describe("background task shared helpers", () => {
 	it("adds the pi managed bin dir to the active PATH key", () => {

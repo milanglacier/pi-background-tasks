@@ -19,6 +19,7 @@ import type {
 	BackgroundTaskEventDetails,
 	BackgroundTaskSnapshot,
 	BackgroundTaskStatus,
+	BackgroundTaskSessionValues,
 } from "./background-tasks-shared.js";
 
 import {
@@ -37,6 +38,7 @@ import {
 	BG_WIDGET_KEY,
 	buildTaskSummaryLine,
 	createBgProcessShellEnv,
+	createBgProcessSessionEnv,
 	formatDuration,
 	formatRelativeTime,
 	getBgProcessLogFilePath,
@@ -74,6 +76,19 @@ interface SpawnTaskOptions {
 	initialLastAlertLength?: number;
 	logFile?: string;
 	expiresAt?: number | null;
+	sessionValues?: BackgroundTaskSessionValues | undefined;
+}
+
+function getTaskSessionValues(ctx: ExtensionContext | undefined): BackgroundTaskSessionValues | undefined {
+	if (!ctx) return undefined;
+
+	return {
+		sessionId: ctx.sessionManager.getSessionId(),
+		sessionFile: ctx.sessionManager.getSessionFile(),
+		provider: ctx.model?.provider,
+		model: ctx.model?.id,
+		thinkingLevel: ctx.thinkingLevel,
+	};
 }
 
 type ThemeLike = Theme;
@@ -568,7 +583,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 				return spawn(shell, [...args, command], {
 					cwd,
 					detached: ownGroup,
-					env: createBgProcessShellEnv(),
+					env: createBgProcessSessionEnv(createBgProcessShellEnv(), options.sessionValues),
 					stdio: ["ignore", "pipe", "pipe"],
 				});
 			})();
@@ -1142,7 +1157,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		description:
 			"Spawn, inspect, and stop background shell tasks. Tasks keep running after the tool returns, append output to a log file, and can wake the agent up when new output arrives or when the task exits. A task is stopped 10 minutes after it starts by default. Set timeoutSeconds to change that, or to 0 for servers, watchers, and other tasks that should run until they are stopped.",
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx): Promise<AgentToolResult<unknown>> {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const { action } = params;
 
 			if (action === "list") {
@@ -1177,6 +1192,7 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 					reactToOutput: params.reactToOutput,
 					notifyPattern: params.notifyPattern,
 					expiresAt: expiry.expiresAt,
+					sessionValues: getTaskSessionValues(ctx),
 				});
 
 				return makeToolResult(
@@ -1385,7 +1401,12 @@ export default function backgroundTasksExtension(pi: ExtensionAPI): void {
 					return;
 				}
 
-				const task = spawnTask({ command, cwd: ctx.cwd, expiresAt: expiry.expiresAt });
+				const task = spawnTask({
+					command,
+					cwd: ctx.cwd,
+					expiresAt: expiry.expiresAt,
+					sessionValues: getTaskSessionValues(ctx),
+				});
 				ctx.ui.notify(`Started ${task.id} (pid ${task.pid}) in the background.`, "info");
 				return;
 			}
