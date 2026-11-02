@@ -291,7 +291,7 @@ export async function createExtensionHarness(): Promise<ExtensionHarness> {
 	const pi: ExtensionAPI = {
 		appendEntry() {},
 		events,
-		exec: async () => ({ stdout: "", stderr: "", exitCode: 0, code: 0, killed: false }),
+		exec: async () => ({ stdout: "", stderr: "", exitCode: 0, code: 0, killed: false, truncated: false }),
 		getActiveTools: () => [...tools.keys()],
 		getAllTools: () => [],
 		getCommands: () => [],
